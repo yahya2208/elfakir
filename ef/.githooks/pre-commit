@@ -1,0 +1,17 @@
+#!/bin/sh
+# pre-commit: يحمي أسماء migrations المطبَّقة وترتيبها، ويفحص صيغة الأدوات المتغيرة.
+set -e
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+protected='ef/supabase/migrations/0001_ef_schema_roles_privileges.sql ef/supabase/migrations/0002_order_status_domain.sql ef/supabase/migrations/0003_ef_ownership.sql'
+status=$(git diff --cached --name-status -- $protected)
+if [ -n "$status" ]; then
+  echo "REFUSED: migrations المطبَّقة (0001–0003) محمية — لا تُحذف ولا تُعاد تسميتها ولا تُعدَّل."
+  echo "$status"
+  exit 1
+fi
+
+cd ef
+for f in $(git diff --cached --name-only -- tools | grep '\.mjs$' || true); do node --check "$root/$f" || exit 1; done
+echo "pre-commit: أسماء migrations محفوظة، والأدوات المتغيرة صالحة الصيغة"

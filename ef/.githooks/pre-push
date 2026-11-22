@@ -1,0 +1,12 @@
+#!/bin/sh
+# pre-push: لا يُرفع أي commit قبل فحص أسرارهِ. يفحص كل التزام مُدرج في الرفع.
+set -e
+cd "$(git rev-parse --show-toplevel)/ef"
+seen=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "$local_sha" ] && continue
+  case "$seen" in *" $local_sha "*) continue;; esac
+  seen="$seen $local_sha "
+  node tools/secret-scan.mjs "$local_sha" || { echo "REFUSED: فحص الأسرار فشل"; exit 1; }
+done
+echo "pre-push: كل الالتزامات نظيفة من الأسرار — مسموح بالرفع"

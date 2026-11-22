@@ -1,0 +1,36 @@
+name: checks
+
+# لا يلمس أي قاعدة بيانات ولا يرفع أي DDL. البوابات تُنفَّذ محليًا فقط
+# لأنها تحتاج token مخزَّنًا في Windows Credential Manager ولا يُوضع في CI.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: صيغة أدوات EF
+        run: for f in ef/tools/*.mjs; do node --check "$f"; done
+      - name: فحص الأسرار على سطح الرفع
+        run: node ef/tools/secret-scan.mjs HEAD
+      - name: الحاجز يرفض بلا موافقة صريحة
+        working-directory: ef
+        run: |
+          set +e
+          out=$(node tools/db-push.mjs 2>&1); rc=$?
+          [ $rc -ne 0 ] || { echo "FAIL: مرّ بلا EF_ALLOW_REMOTE_DDL"; exit 1; }
+          echo "$out" | grep -q "موافقة صريحة" || { echo "FAIL: رسالة الرفض غير واضحة"; exit 1; }
+          out=$(EF_ALLOW_REMOTE_DDL=ef-test node tools/db-push.mjs 2>&1); rc=$?
+          [ $rc -ne 0 ] || { echo "FAIL: مرّ بلا project-ref صحيح"; exit 1; }
+          echo "$out" | grep -q "لا يُسمح بأي تنفيذ SQL خارج ef-test" || { echo "FAIL: رسالة رفض المشروع غير واضحة"; exit 1; }
+          echo "PASS: الحاجز يرفض في الحالتين"
+      - name: لا أسرار في شجرة العمل المتتبَّعة
+        run: |
+          git ls-files | grep -E '\.env$|/\.env\.|\.temp/|service-account\.json' && { echo "FAIL: مسار سرّي متتبَّع"; exit 1; } || echo "PASS: لا مسارات أسرار متتبَّعة"
