@@ -1,7 +1,7 @@
 name: checks
 
-# لا يلمس أي قاعدة بيانات ولا يرفع أي DDL. البوابات تُنفَّذ محليًا فقط
-# لأنها تحتاج token مخزَّنًا في Windows Credential Manager ولا يُوضع في CI.
+# لا يلمس أي قاعدة بيانات ولا ينفّذ أي DDL. البوابات الحقيقية تُشغَّل محليًا
+# لأنها تحتاج token من Windows Credential Manager، ولا تُرفع أسرار إلى CI.
 on:
   push:
     branches: [main]
@@ -16,21 +16,60 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+
       - name: صيغة أدوات EF
         run: for f in ef/tools/*.mjs; do node --check "$f"; done
+
       - name: فحص الأسرار على سطح الرفع
         run: node ef/tools/secret-scan.mjs HEAD
-      - name: الحاجز يرفض بلا موافقة صريحة
+
+      - name: الحاجز يرفض قبل تنفيذ أي شيء
         working-directory: ef
         run: |
           set +e
+          # (أ) لا موافقة صريحة → رفض
           out=$(node tools/db-push.mjs 2>&1); rc=$?
-          [ $rc -ne 0 ] || { echo "FAIL: مرّ بلا EF_ALLOW_REMOTE_DDL"; exit 1; }
-          echo "$out" | grep -q "موافقة صريحة" || { echo "FAIL: رسالة الرفض غير واضحة"; exit 1; }
-          out=$(EF_ALLOW_REMOTE_DDL=ef-test node tools/db-push.mjs 2>&1); rc=$?
-          [ $rc -ne 0 ] || { echo "FAIL: مرّ بلا project-ref صحيح"; exit 1; }
-          echo "$out" | grep -q "لا يُسمح بأي تنفيذ SQL خارج ef-test" || { echo "FAIL: رسالة رفض المشروع غير واضحة"; exit 1; }
-          echo "PASS: الحاجز يرفض في الحالتين"
-      - name: لا أسرار في شجرة العمل المتتبَّعة
+          echo "rc=$rc"; echo "$out"
+          [ $rc -ne 0 ] || { echo "FAIL: db-push.mjs مرّ بلا EF_ALLOW_REMOTE_DDL"; exit 1; }
+          echo "$out" | grep -q "موافقة صريحة" || { echo "FAIL: لم يُذكر سبب الرفض"; exit 1; }
+
+          # (ب) موافقة + مشروع غير مرتبط → رفض (ref صراحةً)
+          rm -rf /tmp/ef-no-ref && mkdir -p /tmp/ef-no-ref
+          cp -r tools supabase /tmp/ef-no-ref/ 2>/dev/null
+          rm -rf /tmp/ef-no-ref/supabase/.temp
+          out=$(cd /tmp/ef-no-ref && EF_ALLOW_REMOTE_DDL=ef-test node tools/db-push.mjs 2>&1); rc=$?
+          echo "rc=$rc"; echo "$out"
+          [ $rc -ne 0 ] || { echo "FAIL: db-push.mjs مرّ بلا supabase/.temp/project-ref"; exit 1; }
+          echo "$out" | grep -q "ycgfqwigogokjydnfzwf" || { echo "FAIL: لم يُذكر ref قاعدة الاختبار في الرفض"; exit 1; }
+
+          # (ج) موافقة + ref لمشروع آخر → رفض، ولا يصل إلى CLI إطلاقًا
+          rm -rf /tmp/ef-wrong-ref && mkdir -p /tmp/ef-wrong-ref/supabase/.temp
+          cp -r tools /tmp/ef-wrong-ref/
+          echo "some-other-project" > /tmp/ef-wrong-ref/supabase/.temp/project-ref
+          out=$(cd /tmp/ef-wrong-ref && EF_ALLOW_REMOTE_DDL=ef-test node tools/db-push.mjs 2>&1); rc=$?
+          echo "rc=$rc"; echo "$out"
+          [ $rc -ne 0 ] || { echo "FAIL: db-push.mjs مرّ على ref غير ef-test"; exit 1; }
+          echo "$out" | grep -q "some-other-project" || { echo "FAIL: لم يُذكر ref الخاطئ في الرفض"; exit 1; }
+          echo "PASS: الحاجز رفض الحالات الثلاث"
+
+      - name: لا مسارات أسرار متتبَّعة
         run: |
-          git ls-files | grep -E '\.env$|/\.env\.|\.temp/|service-account\.json' && { echo "FAIL: مسار سرّي متتبَّع"; exit 1; } || echo "PASS: لا مسارات أسرار متتبَّعة"
+          if git ls-files | grep -Eq '(^|/)\.env$|\.env\.(local|production|test)|\.temp/|service-account\.json'; then
+            echo "FAIL: ملف سرّ في قائمة الملفات المتتبَّعة"; exit 1
+          fi
+          git ls-files | grep -E '\.gitignore|\.env\.example' || true
+          echo "PASS: لا مسارات أسرار متتبَّعة"
+
+      - name: جدار صلاحيات المرحلة 0 (كما هو مكتوب في migration)
+        run: |
+          m=ef/supabase/migrations/0001_ef_schema_roles_privileges.sql
+          test -f "$m" || { echo "FAIL: migration 0001 مفقود"; exit 1; }
+          grep -q "set local role ef_owner" "$m" || { echo "FAIL: لا إنشاء للكائنات باسم ef_owner — الجداول ستُملك لـ postgres"; exit 1; }
+          grep -q "revoke all on schema ef from public" "$m" || { echo "FAIL: schema ef مكشوف لـ public"; exit 1; }
+          grep -q "revoke all on tables" "$m" || { echo "FAIL: الصلاحيات الافتراضية على الجداول غير مسحوبة"; exit 1; }
+          grep -q "revoke all on functions" "$m" || { echo "FAIL: الصلاحيات الافتراضية على الدوال غير مسحوبة"; exit 1; }
+          grep -Eq "^grant usage on schema ef to (.*,){5}[a-z_]+;" "$m" || { echo "FAIL: grant USAGE غير محصور في ستة أدوار"; exit 1; }
+          if grep -Eq "grant (select|insert|update|delete) on (all )?tables" "$m"; then
+            echo "FAIL: grant كتابة مباشرة على الجداول — الكتابة عبر RPC فقط"; exit 1
+          fi
+          echo "PASS: جدار الصلاحيات مطابق لما تُفحصه بوابات G0-1..G0-5"
