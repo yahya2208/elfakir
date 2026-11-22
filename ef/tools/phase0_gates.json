@@ -1,0 +1,47 @@
+[
+  {
+    "id": "G0-1",
+    "title": "مالك schema ef هو ef_owner",
+    "sql": "select nspowner::regrole::text as value, (nspowner::regrole::text = 'ef_owner') as pass from pg_namespace where nspname='ef'"
+  },
+  {
+    "id": "G0-2",
+    "title": "لا كائن في ef يملكه غير ef_owner (جداول/views/فهارس/دوال)",
+    "sql": "select count(*)::text as value, (count(*)=0) as pass from (select c.oid from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='ef' and c.relkind in ('r','v','m','i','S','p') and c.relowner <> (select oid from pg_roles where rolname='ef_owner') union all select p.oid from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='ef' and p.proowner <> (select oid from pg_roles where rolname='ef_owner')) foreign_owned"
+  },
+  {
+    "id": "G0-3",
+    "title": "صفر صلاحية كتابة مباشرة لأي دور متّصل على جداول ef",
+    "sql": "select count(*)::text as value, (count(*)=0) as pass from pg_class c join pg_namespace n on n.oid=c.relnamespace cross join lateral aclexplode(c.relacl) a where n.nspname='ef' and c.relkind='r' and a.privilege_type in ('INSERT','UPDATE','DELETE') and (a.grantee = 0 or a.grantee in (select oid from pg_roles where rolname in ('anon','authenticated','service_role')))"
+  },
+  {
+    "id": "G0-4",
+    "title": "USAGE على ef للأدوار الستة فقط، ولا CREATE لغير المالك",
+    "sql": "select string_agg(distinct r.rolname, ',' order by r.rolname) as value, (count(distinct r.rolname) = 6 and bool_and(a.privilege_type='USAGE') and bool_and(r.rolname in ('anon','authenticated','ef_staff','ef_admin','ef_courier','ef_worker'))) as pass from pg_namespace n cross join lateral aclexplode(n.nspacl) a join pg_roles r on r.oid = a.grantee where n.nspname='ef' and r.rolname <> 'ef_owner'"
+  },
+  {
+    "id": "G0-5",
+    "title": "عزل تام: لا كائن EF في public",
+    "sql": "select count(*)::text as value, (count(*)=0) as pass from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname ~ '^(order_status_domain|order_transition_matrix|orders|order_items|inventory|products|categories|prices|payments|cash_|guest_|delivery_|saved_|rate_|outbox|device_|staff_|customers|addresses|telemetry|notifications)'"
+  },
+  {
+    "id": "G0-6",
+    "title": "لا حالة مختَرَعة ولا حالة ميتة",
+    "sql": "select coalesce(string_agg(status,','),'none') as value, (count(*)=0) as pass from ef.v_order_status_drift_bad"
+  },
+  {
+    "id": "G0-7",
+    "title": "الأعداد من المحرك: حالات / انتقالات / جداول ef",
+    "sql": "select ((select count(*) from ef.order_status_domain)::text || ' statuses / ' || (select count(*) from ef.order_transition_matrix)::text || ' transitions / ' || (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='ef' and c.relkind='r')::text || ' tables') as value, ((select count(*) from ef.order_status_domain)=10 and (select count(*) from ef.order_transition_matrix)=14 and (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='ef' and c.relkind='r')=2) as pass"
+  },
+  {
+    "id": "G0-8",
+    "title": "لا انتقال خروج من حالة طرفية",
+    "sql": "select coalesce(string_agg(m.id::text,','),'none') as value, (count(*)=0) as pass from ef.order_transition_matrix m join ef.order_status_domain f on f.status=m.from_status where f.is_terminal"
+  },
+  {
+    "id": "G0-9",
+    "title": "انتقال واحد لكل زوج (منع انتقالات متوازية غير مُعلَنة)",
+    "sql": "select coalesce(string_agg(from_status || '->' || to_status, ','),'none') as value, (count(*)=0) as pass from (select from_status, to_status from ef.order_transition_matrix group by 1,2 having count(*) > 1) dup"
+  }
+]
