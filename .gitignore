@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+supabase/.temp/
+supabase/.branches/
+*.log
+.DS_Store
+coverage/
+playwright-report/
+test-results/
+.vercel/
+.turbo/
+*.key
+service_role*
