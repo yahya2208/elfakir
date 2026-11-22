@@ -23,7 +23,7 @@ $headers = @(
 ) -join "`n"
 
 try {
-    $cargs = @('-s', '-S', '-X', $Method, '-H', '@-', '-w', "`nHTTP_CODE %{http_code}")
+    $cargs = @('-s', '-S', '--retry', '6', '--retry-connrefused', '--retry-delay', '3', '--connect-timeout', '10', '--max-time', '60', '-X', $Method, '-H', '@-', '-w', "`nHTTP_CODE %{http_code}")
     if ($BodyFile -ne '') { $cargs += @('--data-binary', "@$BodyFile") }
     # العناوين تمر عبر stdin وحدها، والنتيجة تُطبع مباشرةً
     $headers | & curl.exe @cargs "https://api.github.com/$Path"
