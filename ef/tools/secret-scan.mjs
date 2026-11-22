@@ -3,8 +3,11 @@
 // المطلوب بدل ذلك أن يكون عددها المتتبَّع صفرًا. node tools/secret-scan.mjs [ref]
 import { execSync } from 'node:child_process';
 
+const ROOT = execSync('git rev-parse --show-toplevel', { encoding: 'utf8' }).trim();
+const git = (cmd) => execSync(cmd, { encoding: 'utf8', cwd: ROOT, maxBuffer: 64 * 1024 * 1024 });
+
 const ref = process.argv[2] ?? 'HEAD';
-const files = execSync(`git ls-tree -r --name-only ${ref}`, { encoding: 'utf8' }).split('\n').filter(Boolean);
+const files = git(`git ls-tree -r --name-only ${ref}`).split('\n').filter(Boolean);
 
 const patterns = [
   ['service_role key', /\bsb_secret_[A-Za-z0-9_\-]{10,}|"role"\s*:\s*"service_role"/],
@@ -26,6 +29,11 @@ const forbiddenTracked = [
 ];
 
 let hits = 0;
+let unreadable = [];
+if (files.length === 0) {
+  console.log('FAIL: صفر ملفات متتبَّعة — الفحص بلا محتوى لا يثبت شيئًا');
+  process.exit(1);
+}
 for (const f of files) {
   for (const isForbidden of forbiddenTracked) {
     if (isForbidden(f)) {
@@ -35,9 +43,11 @@ for (const f of files) {
   }
   let text;
   try {
-    text = execSync(`git show ${ref}:${f}`, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    text = git(`git show ${ref}:${f}`);
   } catch {
-    continue; // ملفات ثنائية
+    // الاستثناء قد يكون ثنائيًا أو خطأ مسار — يجب ألا يمر بصمت
+    unreadable.push(f);
+    continue;
   }
   for (const [label, re] of patterns) {
     const m = text.match(re);
@@ -47,7 +57,12 @@ for (const f of files) {
     }
   }
 }
+const textual = unreadable.filter((f) => /\.(mjs|sql|json|ps1|yml|yaml|md|toml|gitignore|gitattributes|example|txt|ts|tsx|js)$/.test(f) || !/\./.test(f));
+if (textual.length > 0) {
+  hits++;
+  console.log(`FAIL: ملفات نصية لم يُقرأ محتواها — الفحص غير مكتمل: ${textual.join(', ')}`);
+}
 console.log(hits === 0
-  ? `PASS: ${files.length} ملفًا متتبَّعًا — صفر أثر للأسرار، وصفر مسارات ممنوعة`
+  ? `PASS: ${files.length}/${files.length} ملفًا متتبَّعًا فُحص نصّها — صفر أثر للأسرار، وصفر مسارات ممنوعة`
   : `${hits} أثرًا — الرفع ممنوع حتى يُزال`);
 process.exit(hits === 0 ? 0 : 1);
